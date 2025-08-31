@@ -7,14 +7,26 @@
 <style>
   html,body{margin:0;background:#0e0f13;color:#e9edf1;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
   #wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px}
-  /* スマホで見やすく横幅フィット（内部の論理解像度はそのまま） */
+  /* スマホで横幅フィット（内部解像度は800x560のまま） */
   canvas{background:#12151b;border:1px solid #2a2f3a;border-radius:8px;touch-action:none;width:100%;max-width:900px;height:auto}
   .hint{opacity:.85;font-size:14px}
+
+  /* X共有ボタン */
+  .share-btn{
+    position: fixed; right: 12px; bottom: 14px;
+    font: 16px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding: 10px 14px; border-radius: 999px;
+    border: 1px solid #2a2f3a; background:#1b2130; color:#e9edf1;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+    display: none; z-index: 10;
+  }
+  .share-btn:active{ transform: translateY(1px); }
 </style>
 </head>
 <body>
 <div id="wrap">
   <canvas id="game" width="800" height="560"></canvas>
+  <button id="shareBtn" class="share-btn" type="button">結果をXにポスト</button>
   <div class="hint" id="hint">
     操作：指でドラッグ＝移動 / 画面タップ＝スタート・リトライ（PCは←→↑↓/WASD・スペース）
   </div>
@@ -23,6 +35,7 @@
 (() => {
   const cvs = document.getElementById('game');
   const ctx = cvs.getContext('2d');
+  const shareBtn = document.getElementById('shareBtn');
 
   const W = cvs.width, H = cvs.height;
   const STATE = { TITLE:0, PLAY:1, GAMEOVER:2 };
@@ -39,7 +52,6 @@
 
   function toCanvasXY(e){
     const r = cvs.getBoundingClientRect();
-    // pointer系イベントの位置をキャンバス座標へ
     const x = (e.clientX - r.left) * (cvs.width / r.width);
     const y = (e.clientY - r.top)  * (cvs.height/ r.height);
     return {x,y};
@@ -48,9 +60,10 @@
     if (state !== STATE.PLAY){
       reset();
       state = STATE.PLAY;
+      updateShareButton();
     }
   }
-  // Pointerイベント（iPhone/Safari対応：passive:falseでスクロール抑制）
+  // Pointerイベント（iPhone/Safari対応）
   cvs.addEventListener('pointerdown', (e)=>{
     e.preventDefault();
     startGameIfNeeded();
@@ -63,12 +76,8 @@
     e.preventDefault();
     touchTarget = toCanvasXY(e);
   }, {passive:false});
-  function endPointer(e){
-    if(!touchActive) return;
-    touchActive = false;
-    // 指を離したら慣性で少しだけ残しつつ減速（キーボード未入力と同じ扱い）
-  }
-  cvs.addEventListener('pointerup',   endPointer, {passive:false});
+  function endPointer(e){ if(!touchActive) return; touchActive = false; }
+  cvs.addEventListener('pointerup',     endPointer, {passive:false});
   cvs.addEventListener('pointercancel', endPointer, {passive:false});
   cvs.addEventListener('pointerleave',  endPointer, {passive:false});
 
@@ -94,6 +103,7 @@
     grains.length=0; pests.length=0;
     score=0; lives=3; combo=0; comboTimer=0; tick=0;
     spawnGrainInterval=36; spawnPestInterval=220;
+    updateShareButton(); // プレイ前は非表示
   }
 
   function spawnGrain(){
@@ -131,26 +141,18 @@
   function update() {
     tick++;
 
-    // ====== 入力処理 ======
+    // 入力処理
     const L=key['arrowleft']||key['a'], R=key['arrowright']||key['d'];
     const U=key['arrowup']||key['w'],   D=key['arrowdown']||key['s'];
     const spd = player.spd * (player.power>0 ? 1:0.6);
 
     if (touchActive){
-      // 指の方向へ進む
       const dx = touchTarget.x - player.x;
       const dy = touchTarget.y - player.y;
       const d = Math.hypot(dx,dy);
-      if (d > 2){
-        player.vx = (dx/d) * spd;
-        player.vy = (dy/d) * spd;
-      } else {
-        // ほぼ到達したら減速
-        player.vx *= 0.85;
-        player.vy *= 0.85;
-      }
+      if (d > 2){ player.vx = (dx/d) * spd; player.vy = (dy/d) * spd; }
+      else { player.vx *= 0.85; player.vy *= 0.85; }
     } else {
-      // キーボード操作（PC用）
       if(L) player.vx = -spd; else if(R) player.vx = spd; else player.vx *= 0.85;
       if(U) player.vy = -spd; else if(D) player.vy = spd; else player.vy *= 0.85;
     }
@@ -206,6 +208,7 @@
     if (lives<=0 || player.heat>=100){
       state = STATE.GAMEOVER;
       best = Math.max(best, score);
+      updateShareButton();
     }
   }
 
@@ -279,19 +282,33 @@
       ctx.fillText("タップでリトライ（PCはスペース）", W/2, H/2+40);
       ctx.textAlign="left";
     }
+
+    // 毎フレーム同期（安全策）
+    updateShareButton();
   }
 
-  function loop(){
-    if (state===STATE.PLAY) update();
-    draw();
-    requestAnimationFrame(loop);
+  // 共有ボタンの表示制御＆ポスト
+  function updateShareButton(){
+    if (state === STATE.GAMEOVER){
+      shareBtn.style.display = 'inline-flex';
+    } else {
+      shareBtn.style.display = 'none';
+    }
   }
+  shareBtn.addEventListener('click', ()=>{
+    const text = `【ササニシキ・ドライブ】スコア ${score} 点！#ササニシキ #精米機で人類を救え`;
+    const url  = location.href;
+    const intent = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
+    window.open(intent, '_blank');
+  });
+
+  function loop(){ if (state===STATE.PLAY) update(); draw(); requestAnimationFrame(loop); }
   loop();
 
-  // スペースでも開始できるように残す（PC用）
+  // PC用：スペースで開始/再開も残す
   addEventListener('keydown', (e)=>{
     if (e.key === ' '){
-      if (state!==STATE.PLAY){ reset(); state = STATE.PLAY; }
+      if (state!==STATE.PLAY){ reset(); state = STATE.PLAY; updateShareButton(); }
     }
   });
 
