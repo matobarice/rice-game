@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ササニシキ・ドライブ：精米機で人類を救え</title>
+<style>
+  html,body{margin:0;background:#0e0f13;color:#e9edf1;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  #wrap{display:flex;flex-direction:column;align-items:center;gap:8px;padding:12px}
+  canvas{background:#12151b;border:1px solid #2a2f3a;border-radius:8px;touch-action:none}
+  .hint{opacity:.85;font-size:14px}
+  .btn{cursor:pointer;padding:6px 10px;border:1px solid #2a2f3a;border-radius:6px}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="800" height="560"></canvas>
+  <div class="hint">操作：←→↑↓ / WASD　|　スペース：スタート/リトライ</div>
+</div>
+<script>
+(() => {
+  const cvs = document.getElementById('game');
+  const ctx = cvs.getContext('2d');
+
+  // ====== 基本パラメータ ======
+  const W = cvs.width, H = cvs.height;
+  const STATE = { TITLE:0, PLAY:1, GAMEOVER:2 };
+  let state = STATE.TITLE;
+
+  // 入力
+  const key = {};
+  addEventListener('keydown', e => { key[e.key.toLowerCase()] = true; if(e.key===' ') e.preventDefault(); });
+  addEventListener('keyup',   e => { key[e.key.toLowerCase()] = false; });
+
+  // ランダム
+  const rnd = (a,b) => Math.random()*(b-a)+a;
+
+  // プレイヤー（精米機）
+  const player = {
+    x: W/2, y: H-90, vx:0, vy:0, spd: 4.0,
+    size: 22,
+    suctionR: 48,     // 吸い込み半径
+    heat: 0,          // モーター温度（0-100）
+    power: 100,       // 電力（0-100）
+  };
+
+  // ゲームデータ
+  let grains = [];     // 籾
+  let pests = [];      // 害虫
+  let score = 0;
+  let best = 0;
+  let lives = 3;       // 飢餓ライフ
+  let combo = 0;
+  let comboTimer = 0;  // コンボ猶予（秒）
+  let tick = 0;
+
+  // スポーン管理
+  let spawnGrainInterval = 36;  // フレーム
+  let spawnPestInterval  = 220;
+
+  function reset() {
+    player.x=W/2; player.y=H-90; player.vx=player.vy=0;
+    player.suctionR=48; player.heat=0; player.power=100;
+    grains.length=0; pests.length=0;
+    score=0; lives=3; combo=0; comboTimer=0; tick=0;
+    spawnGrainInterval=36; spawnPestInterval=220;
+  }
+
+  // 籾エンティティ
+  function spawnGrain(){
+    const x = rnd(30, W-30);
+    const spd = rnd(1.1,2.2);
+    grains.push({x, y:-20, vy: spd, r: 10, processed:false});
+  }
+
+  // 害虫（湿気雲扱い）
+  function spawnPest(){
+    const x = Math.random()<.5 ? -20 : W+20;
+    const vx = x<0 ? rnd(1.2,2.2) : rnd(-2.2,-1.2);
+    const y = rnd(H*0.25, H*0.6);
+    pests.push({x, y, vx, r: 14, t: 0});
+  }
+
+  // 衝突判定
+  const dist2 = (a,b,c,d)=> (a-c)*(a-c)+(b-d)*(b-d);
+
+  // 吸い込み＋精米
+  function tryProcess(g){
+    const r = player.suctionR;
+    if (dist2(player.x, player.y, g.x, g.y) < r*r){
+      // 吸い込み演出
+      const dx = player.x - g.x, dy = player.y - g.y;
+      const d = Math.hypot(dx,dy)||1;
+      g.x += dx/d * 2.5;
+      g.y += dy/d * 2.5;
+
+      if (d < player.size){ // 精米完了
+        g.processed=true;
+        score += 10 + Math.floor(combo*1.5);
+        combo += 1;
+        comboTimer = 120; // 2秒
+        player.power = Math.max(0, player.power - 0.8); // 電力消費
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function update() {
+    tick++;
+
+    // 入力
+    const L=key['arrowleft']||key['a'], R=key['arrowright']||key['d'];
+    const U=key['arrowup']||key['w'],   D=key['arrowdown']||key['s'];
+    const spd = player.spd * (player.power>0 ? 1:0.6);
+    if(L) player.vx = -spd; else if(R) player.vx = spd; else player.vx *= 0.85;
+    if(U) player.vy = -spd; else if(D) player.vy = spd; else player.vy *= 0.85;
+
+    player.x += player.vx; player.y += player.vy;
+    player.x = Math.max(24, Math.min(W-24, player.x));
+    player.y = Math.max(80, Math.min(H-24, player.y));
+
+    // スポーン
+    if (tick % spawnGrainInterval === 0) spawnGrain();
+    if (tick % spawnPestInterval === 0 && tick>240) spawnPest();
+
+    // 籾更新
+    for (let i=grains.length-1;i>=0;i--){
+      const g=grains[i];
+      g.y += g.vy;
+      if (tryProcess(g)){
+        grains.splice(i,1);
+        continue;
+      }
+      if (g.y > H+20){
+        grains.splice(i,1);
+        lives -= 1;        // 取り逃し
+        combo = 0;
+        comboTimer = 0;
+      }
+    }
+
+    // 害虫更新
+    for (let i=pests.length-1;i>=0;i--){
+      const p=pests[i];
+      p.x += p.vx;
+      p.t++;
+      // プレイヤー接触でデバフ
+      if (dist2(p.x,p.y,player.x,player.y) < (p.r+player.size)*(p.r+player.size)){
+        player.heat = Math.min(100, player.heat + 14);
+        player.power = Math.max(0, player.power - 8);
+        pests.splice(i,1);
+        combo = 0; comboTimer=0;
+        continue;
+      }
+      if (p.x < -40 || p.x > W+40) pests.splice(i,1);
+    }
+
+    // コンボ時間
+    if (comboTimer>0) comboTimer--;
+    if (comboTimer===0) combo=0;
+
+    // コンボ時一時的に吸引半径UP
+    const baseR = 48;
+    player.suctionR = baseR + Math.min(80, combo*3);
+
+    // 温度・電力の自然変化
+    player.heat = Math.max(0, player.heat - 0.05);      // ゆっくり冷える
+    if (player.power<100 && (tick%30===0)) player.power += 1; // ちょい回復
+
+    // 難易度スケール
+    if (tick%600===0){ // 約10秒毎（60fps想定）
+      spawnGrainInterval = Math.max(16, spawnGrainInterval-2);
+      spawnPestInterval  = Math.max(120, spawnPestInterval-10);
+    }
+
+    // 負け判定
+    if (lives<=0 || player.heat>=100){
+      state = STATE.GAMEOVER;
+      best = Math.max(best, score);
+    }
+  }
+
+  function drawGauge(x,y,w,h,ratio,label,color){
+    ctx.save();
+    ctx.fillStyle="#1b2130"; ctx.fillRect(x,y,w,h);
+    ctx.fillStyle=color; ctx.fillRect(x,y,w*ratio,h);
+    ctx.strokeStyle="#2a2f3a"; ctx.strokeRect(x,y,w,h);
+    ctx.fillStyle="#cfd7e5"; ctx.font="12px system-ui"; ctx.fillText(label, x+6, y+h-6);
+    ctx.restore();
+  }
+
+  function draw() {
+    // 背景
+    ctx.clearRect(0,0,W,H);
+    // グラデ空
+    const grad = ctx.createLinearGradient(0,0,0,H);
+    grad.addColorStop(0,"#0f1522");
+    grad.addColorStop(1,"#0b0e16");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,W,H);
+
+    // ヘッダーUI
+    ctx.fillStyle="#cfd7e5";
+    ctx.font="18px system-ui";
+    ctx.fillText(`SCORE: ${score}`, 16, 28);
+    ctx.fillText(`BEST: ${best}`, 200, 28);
+    ctx.fillText(`LIVES: ${"🍚".repeat(Math.max(0,lives))}`, 360, 28);
+    ctx.fillText(`COMBO: x${combo}`, 520, 28);
+
+    // ゲージ（電力・温度）
+    drawGauge(W-280,10,120,16, player.power/100, "POWER", "#8fd0ff");
+    drawGauge(W-140,10,120,16, player.heat/100,  "HEAT",  "#ff9c8f");
+
+    // プレイヤー（精米機）：本体
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    // 吸引範囲（半透明リング）
+    ctx.beginPath();
+    ctx.arc(0,0, player.suctionR, 0, Math.PI*2);
+    ctx.fillStyle="rgba(255,255,255,0.04)";
+    ctx.fill();
+    // ボディ
+    ctx.fillStyle="#e7eef5";
+    ctx.fillRect(-20,-22,40,44);
+    // 投入口
+    ctx.fillStyle="#b9c7d6";
+    ctx.fillRect(-16,-26,32,8);
+    // 透明窓
+    ctx.fillStyle="#a7c4f5";
+    ctx.fillRect(-14,-4,28,16);
+    // 吐出口（白米）
+    ctx.fillStyle="#d0d7df";
+    ctx.fillRect(-6,22,12,8);
+    // モーターファン風
+    ctx.strokeStyle="#8894a8";
+    ctx.beginPath();
+    ctx.arc(0,0,14,0,Math.PI*2);
+    ctx.stroke();
+    ctx.restore();
+
+    // 籾（未精米）
+    grains.forEach(g=>{
+      ctx.beginPath();
+      ctx.arc(g.x,g.y,g.r,0,Math.PI*2);
+      ctx.fillStyle="#c49b3a"; // 玄米色
+      ctx.fill();
+      // うっすら筋
+      ctx.strokeStyle="rgba(0,0,0,0.15)";
+      ctx.beginPath(); ctx.moveTo(g.x-g.r/2,g.y); ctx.lineTo(g.x+g.r/2,g.y); ctx.stroke();
+    });
+
+    // 害虫/湿気雲
+    pests.forEach(p=>{
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+      ctx.fillStyle="rgba(140,160,210,0.6)";
+      ctx.fill();
+      ctx.strokeStyle="rgba(200,220,255,0.35)";
+      ctx.stroke();
+    });
+
+    // 状態画面
+    if (state===STATE.TITLE){
+      ctx.fillStyle="#e9edf1";
+      ctx.font="bold 32px system-ui";
+      ctx.textAlign="center";
+      ctx.fillText("ササニシキ・ドライブ", W/2, H/2-30);
+      ctx.font="16px system-ui";
+      ctx.fillText("精米機で人類を救え！", W/2, H/2);
+      ctx.fillText("スペースでスタート", W/2, H/2+36);
+      ctx.textAlign="left";
+    } else if (state===STATE.GAMEOVER){
+      ctx.fillStyle="#e9edf1";
+      ctx.font="bold 30px system-ui";
+      ctx.textAlign="center";
+      ctx.fillText("GAME OVER", W/2, H/2-20);
+      ctx.font="16px system-ui";
+      ctx.fillText(`SCORE: ${score}  |  BEST: ${best}`, W/2, H/2+10);
+      ctx.fillText("スペースでリトライ", W/2, H/2+40);
+      ctx.textAlign="left";
+    }
+  }
+
+  function loop(){
+    if (state===STATE.PLAY) update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+  loop();
+
+  // スタート/リトライ
+  addEventListener('keydown', (e)=>{
+    if (e.key === ' '){
+      if (state!==STATE.PLAY){
+        reset();
+        state = STATE.PLAY;
+      }
+    }
+  });
+
+  // 初期描画用リセット
+  reset();
+})();
+</script>
+</body>
+</html>
